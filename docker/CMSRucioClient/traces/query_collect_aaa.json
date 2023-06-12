@@ -1,0 +1,38 @@
+{
+  "_source": [
+        "metadata.timestamp",
+        "data.file_lfn",
+        "data.site_name"
+     ],
+ "from": 0,
+    "size": 10000,
+    "sort": [
+        {
+            "metadata.timestamp": "asc"
+        }
+    ],
+  "query": {
+    "bool": {
+      "must": [
+       {
+          "exists": {
+           "field": "data.site_name" 
+           }
+        },
+        { 
+          "exists": {
+             "field": "data.file_lfn"
+           }
+        },
+        {
+          "range": {
+            "metadata.timestamp": {
+              "gte": "now-12m",
+              "lt": "now"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

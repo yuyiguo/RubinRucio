@@ -1,0 +1,42 @@
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "match_phrase": {
+            "metadata.type": "ssbmetric"
+          }
+        },
+        {
+          "match_phrase": {
+            "metadata.type_prefix": "raw"
+          }
+        },
+        {
+          "match_phrase": {
+            "metadata.monit_hdfs_path": "scap15min"
+          }
+        }
+      ],
+      "filter": {
+        "range": {
+          "metadata.timestamp": {
+            "gte": 0,
+            "lt": 0,
+            "format": "epoch_second"
+          }
+        }
+      }
+    }
+  },
+  "_source": {
+    "includes": [
+      "metadata.timestamp",
+      "data.name",
+      "data.disk_experiment_use",
+      "data.disk_local_use"
+    ]
+  },
+  "size": 500,
+  "sort": [{ "metadata.timestamp": "desc" }]
+}

@@ -1,0 +1,40 @@
+version: '2'
+services:
+  rucio-server:
+    image: rucio/rucio-server-sqlite
+    privileged: true
+    ports:
+     - "443:443"
+     - "8881:80"
+    volumes:
+     - /etc/hostname:/etc/hostname 
+     - /var/log/httpd:/var/log/httpd
+     - /sys/fs/cgroup:/sys/fs/cgroup:ro 
+     - /opt/rucio/etc:/opt/rucio/etc
+     - /etc/grid-security:/etc/grid-security 
+     - /etc/pki:/etc/pki
+     - /etc/httpd/conf.d/rucio.conf.port80:/etc/httpd/conf.d/rucio.conf
+
+  rucio-daemons:
+    image: rucio/rucio-server-sqlite
+    privileged: true
+    volumes:
+     - /etc/supervisord.conf.d:/etc/supervisord.conf.d 
+     - /etc/hostname:/etc/hostname 
+     - /var/log/rucio:/var/log/rucio 
+     - /sys/fs/cgroup:/sys/fs/cgroup:ro 
+     - /opt/rucio/etc:/opt/rucio/etc 
+     - /etc/grid-security:/etc/grid-security 
+     - /etc/pki:/etc/pki 
+
+
+  graphite:
+    image: sitespeedio/graphite
+    ports: 
+     - "8880:80"
+     - "2003:2003"
+ 
+  statsd:
+    image: omesser/statsd
+    ports:
+     - "8125:8125"

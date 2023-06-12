@@ -1,0 +1,3 @@
+2021/03/05 00:16:39 subscription.go:158: Subscription 1: /topic/cms.jobmon.wmarchive: ERROR message:read timeout
+2021/03/05 00:16:39 stompserver.go:249: Bad FWJR message.
+2021/03/05 00:16:39 stompserver.go:367: FWJR message processing error Bad FWJR message

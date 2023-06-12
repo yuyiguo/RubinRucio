@@ -1,0 +1,427 @@
+package main
+
+// stomp-server - Implementation of stomp server to consume, process and produce ActiveMQ messages
+// The server will consumer message from below three topics:
+// 1.
+// 2.
+// 3.
+// Process them, then produce a Ruci trace message and then it to topic:
+//
+
+import (
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"sync/atomic"
+	"time"
+
+	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+
+	// load-balanced stomp manager
+	lbstomp "github.com/vkuznet/lb-stomp"
+	// stomp library
+	"github.com/go-stomp/stomp"
+)
+
+// Configuration stores server configuration parameters
+type Configuration struct {
+
+	// HTTP server configuration options
+	Interval int `json:"interval"` // interval of server
+	Verbose  int `json:"verbose"`  // verbose level
+	// Stomp configuration options
+	StompURI         string `json:"stompURI"`         // StompAMQ URI for consumer and Producer
+	StompLogin       string `json:"stompLogin"`       // StompAQM login name
+	StompPassword    string `json:"stompPassword"`    // StompAQM password
+	StompIterations  int    `json:"stompIterations"`  // Stomp iterations
+	StompSendTimeout int    `json:"stompSendTimeout"` // heartbeat send timeout
+	StompRecvTimeout int    `json:"stompRecvTimeout"` // heartbeat recv timeout
+	EndpointConsumer string `json:"endpointConsumer"` // StompAMQ endpoint Consumer
+	EndpointProducer string `json:"endpointProducer"` // StompAMQ endpoint Producer
+	ContentType      string `json:"contentType"`      // ContentType of UDP packet
+	Protocol         string `json:"Protocol"`         // network protocol tcp4
+}
+
+//Site names from the message may not be what the name Ruci server has. This map matches them
+var sitemap map[string]string
+
+// Config variable represents configuration object
+var Config Configuration
+
+// stompMgr
+var stompMgr *lbstomp.StompManager
+
+//rotation logger
+type rotateLogger struct {
+	RotateLogs *rotatelogs.RotateLogs
+}
+
+//for debugging, counting the how many message received when 1k is processed
+var msgreceived uint64
+
+//helper function to parse sitemap
+func parseSitemap(mapFile string) error {
+	data, err := ioutil.ReadFile(mapFile)
+	if err != nil {
+		log.Println("Unable to read sitemap file", err)
+		return err
+	}
+	//log.Println(string(data))
+	err = json.Unmarshal(data, &sitemap)
+	if err != nil {
+		log.Println("Unable to parse sitemap", err)
+		return err
+	}
+	return nil
+}
+
+// helper function to parse configuration
+func parseConfig(configFile string) error {
+	data, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		log.Println("Unable to read config file", err)
+		return err
+	}
+	//log.Println(string(data))
+	err = json.Unmarshal(data, &Config)
+	if err != nil {
+		log.Println("Unable to parse config", err)
+		return err
+	}
+	if Config.StompIterations == 0 {
+		Config.StompIterations = 3 // number of Stomp attempts
+	}
+	if Config.ContentType == "" {
+		Config.ContentType = "application/json"
+	}
+	if Config.StompSendTimeout == 0 {
+		Config.StompSendTimeout = 1000 // miliseconds
+	}
+	if Config.StompRecvTimeout == 0 {
+		Config.StompRecvTimeout = 1000 // miliseconds
+	}
+	//log.Printf("%v", Config)
+	return nil
+}
+
+func initStomp() {
+	p := lbstomp.Config{
+		URI:         Config.StompURI,
+		Login:       Config.StompLogin,
+		Password:    Config.StompPassword,
+		Iterations:  Config.StompIterations,
+		SendTimeout: Config.StompSendTimeout,
+		RecvTimeout: Config.StompRecvTimeout,
+		Endpoint:    Config.EndpointProducer,
+		ContentType: Config.ContentType,
+		Protocol:    Config.Protocol,
+		Verbose:     Config.Verbose,
+	}
+	stompMgr = lbstomp.New(p)
+	log.Println(stompMgr.String())
+}
+
+func processFWJR(msg *stomp.Message) ([]string, error) {
+	//first to check to make sure there is something in msg,
+	//otherwise we will get error:
+	//Failed to continue - runtime error: invalid memory address or nil pointer dereference
+	//[signal SIGSEGV: segmentation violation]
+	atomic.AddUint64(&msgreceived, 1)
+	if msg == nil || msg.Body == nil {
+		return nil, errors.New("Empty message")
+	}
+
+	var dids []string
+	// convert message to JSON doc
+	var data map[string]interface{}
+	if Config.Verbose > 2 {
+		log.Println("****************")
+		log.Println("Source AMQ message of wmarchive: ", string(msg.Body))
+		log.Println("****************")
+	}
+	err := json.Unmarshal(msg.Body, &data)
+	//totalmsg++
+	if err != nil {
+		log.Printf("Enable to Unmarchal input message. Error: %v", err)
+		return dids, err
+	}
+	// process received message, e.g. extract some fields
+	var goodlfn []string
+	var ts int64
+	var jobtype string
+	var wnname string
+	var LFNArrayRef []string
+	var fallbackFiles []int
+	var LFNArray []string
+	var site string
+
+	if v, ok := data["LFNArrayRef"]; ok {
+		v1 := v.([]interface{})
+		for _, v2 := range v1 {
+			LFNArrayRef = append(LFNArrayRef, v2.(string))
+		}
+	}
+	if Config.Verbose > 2 {
+		log.Printf("LFNArrayRef: %v", LFNArrayRef)
+	}
+	//
+	if v, ok := data["fallbackFiles"]; ok {
+		v1 := v.([]interface{})
+		for _, v2 := range v1 {
+			fallbackFiles = append(fallbackFiles, int(v2.(float64)))
+		}
+	}
+	if Config.Verbose > 2 {
+		log.Printf("fallbackFiles: %v", fallbackFiles)
+	}
+	//
+	if v, ok := data["LFNArray"]; ok {
+		v1 := v.([]interface{})
+		for _, v2 := range v1 {
+			LFNArray = append(LFNArray, v2.(string))
+		}
+	}
+	if Config.Verbose > 2 {
+		log.Printf("LFNArray: %v", LFNArray)
+	}
+
+	if v, ok := data["meta_data"]; ok {
+		v2 := v.(map[string]interface{})
+		if m, ok2 := v2["ts"]; ok2 {
+			ts = int64(m.(float64))
+			if Config.Verbose > 2 {
+				log.Printf("ts: %d", ts)
+			}
+		} else {
+			ts = time.Now().Unix()
+		}
+		if m, ok2 := v2["wn_name"]; ok2 {
+			wnname = m.(string)
+		} else {
+			wnname = "unknown"
+		}
+		if m, ok2 := v2["jobtype"]; ok2 {
+			jobtype = m.(string)
+		} else {
+			jobtype = "unknown"
+		}
+	} else {
+		ts = time.Now().Unix()
+		jobtype = "unknown"
+		wnname = "wnname"
+	}
+	if v, ok := data["steps"]; ok {
+		s := v.([]interface{})
+		for _, ss := range s {
+			step := ss.(map[string]interface{})
+			if v1, ok1 := step["input"]; ok1 {
+				input := v1.([]interface{})
+				for _, v2 := range input {
+					i := v2.(map[string]interface{})
+					if v3, ok3 := i["lfn"]; ok3 {
+						lfn := int(v3.(float64)) //the index of LFNArray
+						if !insliceint(fallbackFiles, lfn) {
+							if inslicestr(LFNArrayRef, "lfn") {
+								if lfn < len(LFNArray) {
+									goodlfn = append(goodlfn, LFNArray[lfn])
+								}
+							}
+						}
+					}
+				}
+			}
+			if s, k := step["site"]; k {
+				site = s.(string)
+			}
+		}
+	}
+	if len(goodlfn) > 0 && len(site) > 0 {
+		if s, ok := sitemap[site]; ok {
+			site = s
+		}
+
+		for _, glfn := range goodlfn {
+			trace := map[string]interface{}{"eventVersion": "API_1.21.6",
+				"clientState": "DONE",
+				"scope":       "cms",
+				"eventType":   "get",
+				"usrdn":       "/DC=ch/DC=cern/OU=Organic Units/OU=Users/CN=yuyi/CN=639751/CN=Yuyi Guo/CN=706639693",
+				"account":     "fwjr",
+			}
+			trace["filename"] = glfn
+			trace["remoteSite"] = site
+			trace["DID"] = "cms:" + fmt.Sprintf("%v", trace["filename"])
+			trace["file_read_ts"] = ts
+			trace["jobtype"] = jobtype
+			trace["wn_name"] = wnname
+			trace["timestamp"] = ts
+			trace["traceTimeentryUnix"] = trace["timestamp"]
+			data, err := json.Marshal(trace)
+			if err != nil {
+				if Config.Verbose > 0 {
+					log.Printf("Unable to marshal back to JSON string , error: %v, data: %v\n", err, trace)
+				} else {
+					log.Printf("Unable to marshal back to JSON string, error: %v \n", err)
+				}
+				return dids, err
+			}
+			if Config.Verbose > 2 {
+				log.Println("*********************")
+				log.Println("Rucio trace record: ", string(data))
+			}
+			// send data to Stomp endpoint
+			if Config.EndpointProducer != "" {
+				err := stompMgr.Send(data)
+				//totaltrace++
+				if err != nil {
+					dids = append(dids, fmt.Sprintf("%v", trace["DID"]))
+					log.Printf("Failed to send %s to stomp.", trace["DID"])
+				}
+			} else {
+				log.Println("*** Config.Enpoint is empty, check config file! ***")
+				err := errors.New("config.Enpoint is empty")
+				return dids, err
+			}
+		}
+	}
+	//log.Printf("Traces sent :%d \n", totaltrace)
+	//log.Printf("Message received :%d \n", totalmsg)
+	return dids, nil
+}
+
+func server() {
+	log.Println("Stomp broker URL: ", Config.StompURI)
+	var err error
+	var addr string
+	var conn *stomp.Conn
+
+	// get connection
+	conn, addr, err = stompMgr.GetConnection()
+	if err != nil {
+		//try again
+		conn, addr, err = stompMgr.GetConnection()
+	}
+	// always close connection
+	//defer conn.Disconnect()
+
+	// subscribe to ActiveMQ topic
+	sub, err2 := conn.Subscribe(Config.EndpointConsumer, stomp.AckAuto)
+	if err2 != nil {
+		sub, err = conn.Subscribe(Config.EndpointConsumer, stomp.AckAuto)
+	}
+	if err != nil {
+		log.Fatal(err)
+	} else if err2 != nil {
+		log.Fatal(err2)
+	} else {
+		log.Println("stomp connected to", addr)
+	}
+
+	var tc uint64
+	t1 := time.Now().Unix()
+	var t2 int64
+	var ok bool
+	var msg *stomp.Message
+	for {
+		// get stomp messages from subscriber channel
+		select {
+		case msg, ok = <-sub.C:
+			if !ok {
+				conn, addr, err = stompMgr.GetConnection()
+				sub, _ := conn.Subscribe(Config.EndpointConsumer, stomp.AckAuto)
+				msg, ok = <-sub.C
+			}
+			if !ok { //still not get the message, skip this case
+				break
+			}
+			// process stomp messages
+			dids, err := processFWJR(msg)
+			if err == nil {
+				atomic.AddUint64(&tc, 1)
+				if Config.Verbose > 1 {
+					log.Println("The number of traces processed in 1000 group: ", atomic.LoadUint64(&tc))
+				}
+			}
+			//log.Println("processed:", tc)
+			if atomic.LoadUint64(&tc) == 1000 {
+				atomic.StoreUint64(&tc, 0)
+				t2 = time.Now().Unix() - t1
+				t1 = time.Now().Unix()
+				log.Printf("Processing 1000 messages while total received %d messages.\n", atomic.LoadUint64(&msgreceived))
+				log.Printf("Processing 1000 messages took %d seconds.\n", t2)
+				atomic.StoreUint64(&msgreceived, 0)
+			}
+			if err != nil && err.Error() != "Empty message" {
+				log.Println("FWJR message processing error", err)
+			}
+			//got error message "FWJR message processing error unexpected end of JSON input".
+			//Code stoped to loop??? YG 2/22/2021
+			if len(dids) > 0 {
+				log.Printf("DIDS in Error: %v .\n ", dids)
+			}
+		default:
+			sleep := time.Duration(Config.Interval) * time.Millisecond
+			if Config.Verbose > 2 {
+				log.Println("waiting for ", sleep)
+			}
+			time.Sleep(sleep)
+		}
+	}
+}
+
+func inslicestr(s []string, v string) bool {
+	for i := range s {
+		if v == s[i] {
+			return true
+		}
+	}
+	return false
+}
+func insliceint(s []int, v int) bool {
+	for i := range s {
+		if v == s[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func main() {
+	// usage: ./stompserver -config stompserverconfig.json -sitemap ruciositemap.json
+
+	atomic.StoreUint64(&msgreceived, 0)
+	//set up roration logs
+	logName := "RucioTrace" + "-%Y%m%d"
+	hostname, err := os.Hostname()
+	if err == nil {
+		logName = "RucioTrace" + "-" + hostname + "-%Y%m%d"
+	}
+	rlog, err := rotatelogs.New(logName)
+	if err == nil {
+		log.SetOutput(rlog)
+	}
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	var config string
+	var fsitemap string
+	flag.StringVar(&config, "config", "", "config file name")
+	flag.StringVar(&fsitemap, "sitemap", "", "runcio sitemap file")
+	flag.Parse()
+	err2 := parseConfig(config)
+	if err2 != nil {
+		log.Fatalf("Unable to parse config file %s, error: %v", config, err2)
+	}
+	err2 = parseSitemap(fsitemap)
+	if err2 != nil {
+		log.Fatalf("Unable to parse rucio sitemap file %s, error: %v", fsitemap, err2)
+	}
+	if Config.Verbose > 0 {
+		log.Printf("%v", Config)
+		log.Printf("%v", sitemap)
+	}
+	initStomp()
+	server()
+}

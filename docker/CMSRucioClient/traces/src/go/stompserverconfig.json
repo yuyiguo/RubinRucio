@@ -1,0 +1,11 @@
+{
+    "stompLogin":"cmsrucio",
+    "stompPassword":"60P7FaWXWoeOJAXm",
+    "producer":"wmarchive",
+    "endpointConsumer":"/topic/cms.jobmon.wmarchive",
+    "endpointProducer":"/topic/cms.rucio.tracer",
+    "stompURI":"cms-test-mb.cern.ch:61313",
+    "interval": 1,
+    "verbose": 3,
+    "Protocol": "tcp4"
+}
