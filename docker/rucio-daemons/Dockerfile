@@ -15,13 +15,20 @@ FROM rucio/rucio-daemons:release-$RUCIO_VERSION
 #ADD docker/rucio-daemons/globus-config.yml.j2 /tmp
 
 # for debugging
-RUN pip3 install remote-pdb 
-RUN yum install -y net-tools telnet
+#RUN pip3 install remote-pdb 
+#RUN yum install -y net-tools telnet
 
 # ADD docker/rucio-daemons/cms-entrypoint.sh /
 
 # Cannot make patch directory unless there are patches
-RUN mkdir -p /patch
+#RUN mkdir -p /patch
 
 # My patch for FNAL URL problem
-ADD https://patch-diff.githubusercontent.com/raw/yuyiguo/rucio/pull/6.patch /patch/6.patch
+#ADD https://patch-diff.githubusercontent.com/raw/yuyiguo/rucio/pull/6.patch /patch/6.patch
+
+# Add grid security certificates
+RUN mkdir -p /etc/grid-security2
+ADD certificate-550.tar.gz /etc/grid-security2/certificate-550.tar.gz
+#RUN tar -xvf /etc/grid-security2/certificate-550.tar 
+CMD sleep 9999999999d
+#CMD exec /bin/sh -c "trap : TERM INT; sleep 9999999999d & wait"
